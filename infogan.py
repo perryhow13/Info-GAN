@@ -13,14 +13,14 @@ STRIDE = 2
 CHANNEL = 1
 BATCH_SIZE = 50
 EPOCH = 10
-gen_lr =  0.001
-dis_lr =0.0002
-beta1 = 0.5
-beta2 = 0.999
+GEN_LR =  0.001
+DIS_LR =0.0002
+BETA1 = 0.5
+BETA2 = 0.999
 LAMBDA =1.0
+POOLING = 1
 
-transform = transforms.Compose([transforms.Scale(64),
-                                transforms.ToTensor(),
+transform = transforms.Compose([transforms.ToTensor(),
                                 transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
 train_set = torchvision.datasets.MNIST(root='./MNIST', train=True, download=True, transform=transform)
@@ -28,67 +28,97 @@ train_loader = torch.utils.data.DataLoader(train_set, batch_size=BATCH_SIZE, shu
 #test_set = torchvision.datasets.MNIST(root='./MNIST', train=False, download=True, transform=transform)
 #test_loader = torch.utils.data.DataLoader(test_set, batch_size=BATCH_SIZE, shuffle=False, num_workers=2)
 
-class Generator(nn.Module):
+class Discriminator(nn.Module):
   def __init__(self):
-    super(Generator, self).__init__()
-    self.fc0 = nn.Linear2D(NVEC_SIZE, 1024, bias=False)
-    self.bn0 = nn.BatchNorm2d(1024)
-    self.relu0 = nn.ReLU()
-    self.fc1 = nn.Linear2D(1024, 128*7*7)
-    self.bn1 = nn.BatchNorm2d(128)
-    self.relu1 = nn.ReLU()
-    self.convt0 = nn.ConvTranspose2d(128, 64, FILTER_SIZE, STRIDE, bias=False)
-    self.bn2 = nn.BatchNorm2d(64)
-    self.relu2 = nn.ReLU()
-    self.convt1 = nn.ConvTranspose2d(64, CHANNEL, FILTER_SIZE, STRIDE, bias=False)
+    super(Discriminator, self).__init__()
+    self.model = nn.Sequential(nn.Conv2d(CHANNEL, 64, FILTER_SIZE, STRIDE, POOLING, bais=False),
+                              nn.LeakyReLU(0.1),
+                              nn.Conv2d(64, 128, FILTER_SIZE, STRIDE, POOLING, bias=False),
+                              nn.BatchNorm2d(128),
+                              nn.LeakyReLU(0.1),
+                              nn.Conv2d(128, 1024, FILTER_SIZE+3, bias=False),
+                              nn.BatchNorm2d(1024),
+                              nn.LeakyReLU(0.1),
+                              nn.Conv2d(1024, CHANNEL, 1, bais=False),
+                              nn.Sigmoid())
 
   def weight_init(self, mean=0.0, std=0.02):
     for m in self._modules:
-      if isinstance(self._modules[m], nn.ConvTranspose2d) or isinstance(self._modules[m], nn.Linear2D):
+      if isinstance(self._modules[m], nn.Conv2d):
+        self._modules[m].weight.data.normal_(mean, std)
+        self._modules[m].bias.data.zero_()
+
+  def forward(self,input):
+    output = self.model(input).squeeze()
+    return output
+
+class Q(nn.Module):
+  def __init__(self):
+    self.conv0 = nn.Conv2d(CHANNEL, 64, FILTER_SIZE, STRIDE, POOLING, bias=False)
+    self.lr0 = nn.LeakyReLU(0.1)
+    self.conv1 = nn.Conv2d(64, 128, FILTER_SIZE, STRIDE, POOLING, bias=False)
+    self.bn1 = nn.BatchNorm2d(128)
+    self.lr1 = nn.LeakyReLU(0.1)
+    self.conv2 = nn.Conv2d(128, 1024, FILTER_SIZE+3, STRIDE-1, bias=False)
+    self.bn2 = nn.BatchNorm2d(1024)
+    self.lr2 = nn.LeakyReLU(0.1)
+    self.conv3 =nn.Conv2d(1024, 128, 1, bias=False)
+    self.bn3 = nn.BatchNorm2d(128)
+    self.lr3 = nn.LeakyReLU(0.1)
+    self.discrete = nn.Conv2d(128, 10, 1, bias=False)
+    self.mean = nn.Conv2d(128, 2, 1, bias=False)
+    self.std = nn.Conv2d(128, 2, 1, bias=False)
+
+  def weight_init(self, mean=0.0, std=0.02):
+  for m in self._modules:
+    if isinstance(self._modules[m], nn.Conv2d):
+      self._modules[m].weight.data.normal_(mean, std)
+      self._modules[m].bias.data.zero_()
+
+  def forward(self, inputs):
+    x = self.conv0(inputs)
+    x = self.lr0(x)
+    x = self.conv1(x)
+    x = self.bn1(x)
+    x = self.lr1(x)
+    x = self.conv2(x)
+    x = self.bn2(x)
+    x = self.lr2(x)
+    x = self.conv3(x)
+    x = self.bn3(x)
+    x = self.lr3(x)
+
+    disc = self.discrete(x).squeeze()
+    mean = self.mean(x).squeeze()
+    std = self.std(x).squeeze().exp()
+
+    return (disc, mean, std)
+
+class Generator(nn.Module):
+  def __init__(self):
+    super(Generator, self).__init__()
+    self.model = nn.Sequential(nn.ConvTranspose2d(NVEC_SIZE, 1024, FILTER_SIZE-3, STRIDE-1, bias=False),
+                               nn.BatchNorm2d(1024),
+                               nn.ReLU(),
+                               nn.ConvTranspose2d(1024, 128, FILTER_SIZE+3, STRIDE-1, bias=False),
+                               nn.BatchNorm2d(128),
+                               nn.ReLU(),
+                               nn.ConvTranspose2d(128, 64, FILTER_SIZE, STRIDE, POOLING, bias=False),
+                               nn.BatchNorm2d(64),
+                               nn.ReLU(),
+                               nn.ConvTranspose2d(64, CHANNEL, FILTER_SIZE, STRIDE, POOLING, bias=False),
+                               nn.Sigmoid())
+
+  def weight_init(self, mean=0.0, std=0.02):
+    for m in self._modules:
+      if isinstance(self._modules[m], nn.ConvTranspose2d):
         self._modules[m].weight.data.normal_(mean, std)
         self._modules[m].bias.data.zero_()
 
   def forward(self, inputs):
-    x = self.fc0(inputs)
-    x = self.bn0(x)
-    x = self.relu0(x)
-    x = self.fc1(x)
-    x = self.bn1(x.view(-1,128,7,7))
-    x = self.relu1(x)
-    x = self.convt0(x)
-    x = self.bn2(x)
-    x = self.relu2(x)
-    output = self.convt1(x)
+    output = self.model(inputs)
     return output
 
-class QDiscriminator(nn.Module):
-  def __init__(self):
-    super(QDiscriminator, self).__init__()
-    self.conv0 = nn.Conv2d(CHANNEL, 64, FILTER_SIZE, STRIDE, bias=False)
-    self.lrelu0 =nn.LeakyReLU(negative_slope=0.1, inplace=True)
-
-    self.conv1 = nn.Conv2d(64, 128, FILTER_SIZE, STRIDE, bias=False)
-    self.bn0 = nn.BatchNorm2d(128)
-    self.lreu1 = nn.LeakyReLU(negative_slope=0.1, inplace=True)
-
-    self.fc0 = nn.Linear2D(,1024)
-    self.bn1 = nn.BatchNorm2d(1024)
-
-    self.fc1 = nn.Linear2D(1024, 10)
-
-    self.fc2 = nn.Linear2D(1024, 128)
-    self.lreu2 = nn.LeakyReLU(negative_slope=0.1, inplace=True)
-    self.fc3 = nn.Linear2D(128, )
-
-  def weight_init(self, mean=0.0, std=0.02):
-    for m in self._modules:
-      if isinstance(self._modules[m], nn.Conv2d) or isinstance(self._modules[m], nn.Linear2D):
-        self._modules[m].weight.data.normal_(mean, std)
-        self._modules[m].bias.data.zero_()
-
-  def forward(self, input):
-    output = self.model(input)
-    return output
 
 real_label = Variable(torch.ones(BATCH_SIZE)).cuda()
 fake_label = Variable(torch.zeros(BATCH_SIZE).cuda())
@@ -102,10 +132,10 @@ dis.weight_init()
 dis.cuda()
 
 loss_func = nn.BCELoss()
-gen_optimizer = torch.optim.Adam(gen.parameters(), lr=gen_lr, betas=(beta1, beta2))
-dis_optimizer = torch.optim.Adam(dis.parameters(), lr=dis_lr, betas=(beta1, beta2))
+gen_optimizer = torch.optim.Adam(gen.parameters(), lr=GEN_LR, betas=(BETA1, BETA2))
+dis_optimizer = torch.optim.Adam(dis.parameters(), lr=DIS_LR, betas=(BETA1, BETA2))
 
-fixed_noise = Variable(torch.Tensor(BATCH_SIZE, 100, 1, 1).uniform_(-1, 1).cuda())
+fixed_noise = Variable(torch.Tensor(BATCH_SIZE, NVEC_SIZE-12, 1, 1).uniform_(-1, 1).cuda())
 
 for epoch in range(EPOCH):
   for i, data in enumerate(train_loader):
